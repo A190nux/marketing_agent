@@ -307,9 +307,9 @@ between the two comparisons above.
 ## Example conversation
 
 This is the actual conversation transcript produced by `python examples/run_demo.py`,
-read directly from `examples/demo_transcript.json` (each entry is exactly the
-`{"role": ..., "content": ...}` object LangGraph's `messages` state produced —
-nothing paraphrased or reformatted).
+combining the `messages` state written to `examples/demo_transcript.json` with
+the caption before/after detail the script prints to the terminal so the
+manager's feedback is fully visible.
 
 **Turn 1 — manager describes the campaign**
 
@@ -344,6 +344,14 @@ low-res → `super_res` runs with `real_esrgan` → `ad_creation` → `platform_
 }
 ```
 
+The caption generated at this point:
+
+> Upgrade your morning routine with our sleek ceramic pour-over, designed to
+> brew the perfect cup every single time. As a launch week special, grab your
+> maker today and get a fresh bag of beans on us for free! Treat yourself to
+> café-quality coffee right in your kitchen without the hassle.
+> #PourOverCoffee #HomeBarista #CoffeeLovers #LaunchSpecial
+
 ```json
 {
   "role": "assistant",
@@ -368,6 +376,19 @@ low-res → `super_res` runs with `real_esrgan` → `ad_creation` → `platform_
   "content": "Updated based on your feedback (\"Make the caption punchier and mention free shipping.\") — here's the revised ad image and caption."
 }
 ```
+
+The caption regenerated with that feedback:
+
+> Unlock your morning brew game with our sleek ceramic pour-over, now
+> available with a free bag of premium beans inside! As a launch week
+> exclusive, every order includes free shipping so you can sip fresh,
+> artisanal coffee from the comfort of your home. Grab your set before these
+> limited-time perks disappear! #PourOverPerfection #FreeShipping
+> #CoffeeLovers #LaunchWeek
+
+The feedback is visibly reflected: a "free shipping" mention that wasn't
+there before, and a shift from the slower "upgrade your morning routine"
+opener to a more urgent "before these limited-time perks disappear."
 
 ```json
 {
