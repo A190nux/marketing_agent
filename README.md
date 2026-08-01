@@ -504,7 +504,7 @@ here is a hardcoded string dropped into the chat.
 
 ## Known limitations
 
-- **The optional img2img ad-image path is still a subtle effect by design —
+- The optional img2img ad-image path is still a subtle effect by design —
   strength is deliberately kept low (0.15–0.45) so the actual product
   stays recognizable, and the result still goes through the same crop/
   resize/banner compositing as every other ad image. So even with a
