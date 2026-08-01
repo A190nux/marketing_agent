@@ -2,11 +2,25 @@
 compare_sr_backends.py
 -----------------------
 Standalone comparison of the SR backends, independent of the LangGraph
-agent/UI. Runs THREE things side by side:
+agent/UI. Runs FOUR things side by side:
 
-    1. real_esrgan  -- general-purpose trained model
-    2. mri_model    -- your trained model (domain-mismatched, see README)
-    3. bicubic      -- plain interpolation, no model at all
+    1. real_esrgan            -- general-purpose trained model
+    2. mri_model               -- your trained model, TILED (default, what
+                                   the app actually uses -- see below)
+    3. mri_model_whole_image   -- your trained model, run on the whole
+                                   image in one shot (NOT tiled, NOT used
+                                   by the app -- comparison only)
+    4. bicubic                 -- plain interpolation, no model at all
+
+Why tiling: confirmed via --native-scale (see git history / README) that
+mri_model performs much better near its actual 64x64 training crop size
+than run on a full-size photo directly (+222% Laplacian sharpness vs.
+bicubic at native scale, vs. +5% -- indistinguishable -- at full size). The
+app's default MRIModelBackend now tiles the image into overlapping 64x64
+patches to run inference at that scale even on full-size uploads. This
+script's mri_model_whole_image entry is the OLD non-tiled behavior, kept
+around specifically so you can see the difference tiling makes -- it's
+intentionally not reachable from the Streamlit app.
 
 Why bicubic matters here specifically: RRDBNet's own architecture (see
 mri_sr_model.py) has a bicubic term baked directly into its skip connection
@@ -16,7 +30,7 @@ residual branch has learned to contribute little, and most of what you're
 seeing from mri_model is actually just that skip connection -- which isn't
 bad (it's a sensible inductive bias, and it guarantees the model is never
 worse than bicubic), but it's worth knowing which one you're looking at.
-This script computes a direct pixel-level diff between mri_model's output
+This script computes a direct pixel-level diff between each model's output
 and plain bicubic to quantify exactly that, rather than relying on eyeballing
 images that can look similar at a glance for genuinely different reasons.
 
@@ -27,10 +41,11 @@ is to see the real model's behavior, not a stand-in.
 Usage:
     python examples/compare_sr_backends.py path/to/product_photo.jpg
     python examples/compare_sr_backends.py path/to/product_photo.jpg --hr path/to/known_hr.jpg
+    python examples/compare_sr_backends.py path/to/product_photo.jpg --native-scale
 
 With --hr, also computes PSNR/SSIM against a genuine high-res reference for
-all three (useful if you have a deliberately-downscaled test pair). Without
-it, only the qualitative side-by-side and the mri_model-vs-bicubic diff are
+all four (useful if you have a deliberately-downscaled test pair). Without
+it, only the qualitative side-by-side and the diff-from-bicubic numbers are
 produced -- there's no ground truth to score absolute quality against for
 an arbitrary photo, but the diff-from-bicubic doesn't need one.
 """
@@ -136,8 +151,11 @@ def main():
         print(f"--native-scale: downsampled input to 64x64 (mri_model's training crop size) first")
     print(f"Input: {args.image} ({img.size[0]}x{img.size[1]})")
 
+    mri_whole = MRIModelBackend(tile=False)
+    mri_whole.name = "mri_model_whole_image"  # distinct name -- separate output file, doesn't collide with tiled
+
     results = {}
-    for backend in (RealESRGANBackend(), MRIModelBackend(), BicubicBackend()):
+    for backend in (RealESRGANBackend(), MRIModelBackend(), mri_whole, BicubicBackend()):
         print(f"\n--- {backend.name} ---")
         out = backend.enhance(img)
         if backend.used_fallback and not args.allow_fallback:
@@ -154,13 +172,22 @@ def main():
         print(f"Saved: {out_path}")
         results[backend.name] = out
 
+    print("\n=== mri_model: tiled (default, used by the app) vs. whole-image ===")
+    a = np.array(results["mri_model"].convert("RGB"), dtype=np.float64)
+    b = np.array(results["mri_model_whole_image"].convert("RGB"), dtype=np.float64)
+    if a.shape == b.shape:
+        print(f"  mean abs pixel diff: {np.abs(a - b).mean():.2f} / 255 "
+              f"(0 would mean tiling made no difference at all)")
+    else:
+        print(f"  sizes differ ({a.shape} vs {b.shape}) -- both should be exactly 4x input, check for a bug")
+
     # the actual question this script exists to answer
     print("\n=== How much is each model contributing beyond plain bicubic? ===")
     print("(mean abs pixel diff / PSNR measure how MUCH changed, not whether it's\n"
           " structured sharpening vs. incoherent noise -- see sharpness section below\n"
           " for that distinction, which is usually what 'I can't tell visually' means.)")
     bicubic_im = results["bicubic"]
-    for name in ("real_esrgan", "mri_model"):
+    for name in ("real_esrgan", "mri_model", "mri_model_whole_image"):
         _diff_from_bicubic(name, results[name], bicubic_im)
 
     print("\n=== Sharpness per output (Laplacian variance -- higher = more defined edges/texture) ===")
@@ -170,7 +197,7 @@ def main():
         sharpness[name] = _laplacian_variance(gray)
         print(f"  {name}: {sharpness[name]:.1f}")
     bicubic_sharpness = sharpness["bicubic"]
-    for name in ("real_esrgan", "mri_model"):
+    for name in ("real_esrgan", "mri_model", "mri_model_whole_image"):
         delta = sharpness[name] - bicubic_sharpness
         pct = (delta / bicubic_sharpness * 100) if bicubic_sharpness else float("nan")
         if delta > bicubic_sharpness * 0.05:
@@ -192,7 +219,7 @@ def main():
         y += im.size[1] + 40
     combined_path = os.path.join(out_dir, "side_by_side.png")
     combined.save(combined_path)
-    print(f"\nSide-by-side comparison (labeled: real_esrgan / mri_model / bicubic) saved to: {combined_path}")
+    print(f"\nSide-by-side comparison (labeled: real_esrgan / mri_model / mri_model_whole_image / bicubic) saved to: {combined_path}")
 
     if args.hr:
         with Image.open(args.hr) as hr_im:

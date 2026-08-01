@@ -230,25 +230,46 @@ class MRIModelBackend(_FallbackUpscaleMixin, SRModel):
     (RRDBNet, see mri_sr_model.py — architecture copied verbatim from the
     training notebook so `best_sr_model.pt` loads correctly).
 
-    Trained on 64x64 -> 256x256 (scale=4) crops, but the architecture is
-    fully convolutional, so it runs on any input H/W at inference (output
-    is exactly 4x each dimension). See module docstring, "On resolution",
-    for what that does and doesn't mean for quality on larger inputs.
+    Trained on 64x64 -> 256x256 (scale=4) crops. Confirmed via
+    examples/compare_sr_backends.py --native-scale that the model's trained
+    residual branch does meaningfully sharpen beyond the bicubic skip
+    connection AT that scale (+222% Laplacian sharpness vs. bicubic in one
+    test), but is essentially indistinguishable from bicubic when run on a
+    full-size photo directly (+5%) -- the model's fixed-pixel receptive
+    field sees full-size photo content at a much finer relative scale than
+    anything in its training crops, on top of the MRI-vs-photo domain gap.
+
+    TILING (default on, see `tile`): rather than running the whole photo
+    through the model at once, split it into overlapping 64x64 LR tiles
+    (matching the training crop size), run each tile through the model at
+    the scale it was actually trained on, and blend the overlapping regions
+    back together. This lets a full-size photo benefit from the
+    sharpening effect confirmed above, instead of defaulting to
+    near-bicubic. Overlap uses simple averaging in the overlap region
+    (not a fancy taper) -- keeps the implementation simple; visible seams
+    are unlikely at 8px overlap but not mathematically impossible.
+
+    Whole-image (non-tiled) mode is kept available via `tile=False` for
+    comparison -- intentionally NOT exposed through get_backend() /
+    the Streamlit app, only reachable by constructing MRIModelBackend(tile=False)
+    directly, as examples/compare_sr_backends.py does.
 
     The MRI model only understands 1-channel input. To reuse it on a 3-channel
     color product photo without retraining anything:
 
         1. Convert RGB -> YCbCr.
-        2. Run the MRI model on the Y (luminance) channel only.
+        2. Run the MRI model on the Y (luminance) channel only (tiled, see above).
         3. Upsample Cb/Cr with plain bicubic (chroma detail is far less
-           perceptually important than luminance detail).
+           perceptually important than luminance detail, and tiling it
+           wouldn't help since the model never touches Cb/Cr anyway).
         4. Merge Y' + Cb' + Cr' back into RGB.
 
     This is a legitimate, documented domain adapter -- but the underlying
-    model was trained on medical imagery, so results on real photos may show
-    over-smoothing or MRI-like texture artifacts. Kept here as a secondary,
-    clearly-labeled option; `real_esrgan` is the recommended default for
-    product photography.
+    model was trained on medical imagery, so results on real photos may
+    still show over-smoothing or MRI-like texture artifacts even with
+    tiling fixing the scale mismatch. Kept here as a secondary, clearly
+    labeled option; `real_esrgan` is the recommended default for product
+    photography.
     """
 
     name = "mri_model"
@@ -259,9 +280,25 @@ class MRIModelBackend(_FallbackUpscaleMixin, SRModel):
     WEIGHTS_PATH = os.path.join(PROJECT_ROOT, "checkpoints", "best_sr_model.pt")
     DEVICE = "cuda"
 
-    def __init__(self, weights_path: str | None = None, device: str | None = None):
+    # Matches the training crop size -- see compare_sr_backends.py --native-scale
+    # for why this specific size matters (it's where the model was confirmed to
+    # actually contribute beyond bicubic).
+    TILE_SIZE = 64
+    TILE_OVERLAP = 8
+
+    def __init__(
+        self,
+        weights_path: str | None = None,
+        device: str | None = None,
+        tile: bool = True,
+        tile_size: int | None = None,
+        tile_overlap: int | None = None,
+    ):
         self.weights_path = weights_path or self.WEIGHTS_PATH
         self.device = device or self.DEVICE
+        self.tile = tile
+        self.tile_size = tile_size or self.TILE_SIZE
+        self.tile_overlap = tile_overlap or self.TILE_OVERLAP
         self._model = None
         self._meta = None
         self.used_fallback = False
@@ -290,14 +327,67 @@ class MRIModelBackend(_FallbackUpscaleMixin, SRModel):
             self._model = False
         return self._model
 
-    def _run_on_y_channel(self, y: np.ndarray, model) -> np.ndarray:
+    def _run_model(self, tile_np: np.ndarray, model) -> np.ndarray:
+        """Run the model on a single HxW float32 (0-255) tile, return the
+        4x-upscaled float32 (0-255) result."""
         import torch  # type: ignore
 
         with torch.no_grad():
-            t = torch.from_numpy(y).float().unsqueeze(0).unsqueeze(0) / 255.0
+            t = torch.from_numpy(tile_np).float().unsqueeze(0).unsqueeze(0) / 255.0
             t = t.to(self.device)
             out = model(t).clamp(0, 1).squeeze().cpu().numpy() * 255.0
         return out
+
+    def _run_on_y_channel(self, y: np.ndarray, model) -> np.ndarray:
+        """Whole-image (non-tiled) path -- runs the model on the full Y
+        channel in one shot. This is what the model saw as "not the trained
+        scale" in the compare_sr_backends.py finding; kept for comparison,
+        not used by default."""
+        return self._run_model(y, model)
+
+    @staticmethod
+    def _tile_starts(length: int, tile: int, overlap: int) -> list[int]:
+        """Start positions for overlapping tiles covering [0, length), each
+        exactly `tile` wide, with the last tile's end pinned to `length`
+        (shifted left rather than padded) so every pixel is covered by at
+        least one tile without needing to pad the image."""
+        if length <= tile:
+            return [0]
+        stride = tile - overlap
+        starts = list(range(0, length - tile + 1, stride))
+        if starts[-1] != length - tile:
+            starts.append(length - tile)
+        return starts
+
+    def _run_on_y_channel_tiled(self, y: np.ndarray, model) -> np.ndarray:
+        """Split the Y channel into overlapping tile_size x tile_size tiles
+        (matching the model's training crop size), run each through the
+        model independently, and blend back together with simple averaging
+        in the overlap regions. See class docstring for why this matters --
+        the model performs much better at this scale than run whole-image."""
+        h, w = y.shape
+        tile = min(self.tile_size, h, w)
+        overlap = min(self.tile_overlap, tile // 2) if tile > 1 else 0
+
+        y_starts = self._tile_starts(h, tile, overlap)
+        x_starts = self._tile_starts(w, tile, overlap)
+
+        scale = UPSCALE_FACTOR
+        out_h, out_w = h * scale, w * scale
+        accum = np.zeros((out_h, out_w), dtype=np.float64)
+        weight = np.zeros((out_h, out_w), dtype=np.float64)
+
+        for ys in y_starts:
+            for xs in x_starts:
+                patch = y[ys:ys + tile, xs:xs + tile]
+                sr_patch = self._run_model(patch, model)
+                oy, ox = ys * scale, xs * scale
+                oh, ow = sr_patch.shape
+                accum[oy:oy + oh, ox:ox + ow] += sr_patch
+                weight[oy:oy + oh, ox:ox + ow] += 1.0
+
+        weight[weight == 0] = 1.0  # shouldn't happen given _tile_starts guarantees full coverage
+        return accum / weight
 
     def enhance(self, image: Image.Image) -> Image.Image:
         model = self._load()
@@ -308,7 +398,10 @@ class MRIModelBackend(_FallbackUpscaleMixin, SRModel):
             y, cb, cr = ycbcr.split()
             y_np = np.array(y, dtype=np.float32)
 
-            y_sr = self._run_on_y_channel(y_np, model)
+            if self.tile:
+                y_sr = self._run_on_y_channel_tiled(y_np, model)
+            else:
+                y_sr = self._run_on_y_channel(y_np, model)
             new_size = (y_sr.shape[1], y_sr.shape[0])
 
             cb_sr = cb.resize(new_size, Image.BICUBIC)
