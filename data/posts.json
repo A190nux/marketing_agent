@@ -1,0 +1,52 @@
+[
+  {
+    "post_id": "sim-a848003327",
+    "platform": "facebook",
+    "publish_datetime": "2026-08-01T19:00",
+    "status": "scheduled",
+    "caption": "Buy one get a free bag of beans on Ceramic pour-over coffee maker, made for home coffee enthusiasts aged 25-40! Don't miss this chance to drive sales for the launch week. Shop now while it lasts. #CeramicPour-overCoffeeMa #LimitedOffer #ShopNow",
+    "ad_image_path": "/home/algonyx/Projects/marketing_agent/examples/../tools/../static/generated/demo_product_raw_enhanced_real_esrgan_ad.png",
+    "created_at": "2026-07-31T17:16:55",
+    "simulated": true
+  },
+  {
+    "post_id": "sim-147c747e0a",
+    "platform": "facebook",
+    "publish_datetime": "2026-08-01T18:00",
+    "status": "scheduled",
+    "caption": "Is free trial for the first 3 months on That makes managing databases easier during the current ai ecosystems, made for software companies that use ai agents extensively! Don't miss this chance to to get free users in hopes that after the three months. Shop now while it lasts. #ThatMakesManagingDatabas #LimitedOffer #ShopNow",
+    "ad_image_path": "/home/algonyx/Projects/marketing_agent/tools/../static/generated/71aEUdO2dpL._AC_UF350,350_QL80__enhanced_mri_model_ad.png",
+    "created_at": "2026-07-31T17:45:22",
+    "simulated": true
+  },
+  {
+    "post_id": "sim-0d8fddab97",
+    "platform": "instagram",
+    "publish_datetime": "2026-08-01T19:00",
+    "status": "scheduled",
+    "caption": "Wake up to the ultimate brew with our sleek ceramic pour-over, now available with a free bag of premium beans and free shipping on everything! Skip the expensive cafe lines and craft your perfect cup at home while we treat you to the beans and delivery. Grab your kit before stock runs out this launch week! #PourOverLove #HomeCoffeeBar #FreeShipping #CoffeeLaunch",
+    "ad_image_path": "/home/algonyx/Projects/marketing_agent/examples/../tools/../static/generated/demo_product_raw_enhanced_real_esrgan_ad.png",
+    "created_at": "2026-08-01T11:25:53",
+    "simulated": true
+  },
+  {
+    "post_id": "sim-600383c697",
+    "platform": "instagram",
+    "publish_datetime": "2026-08-01T18:00",
+    "status": "scheduled",
+    "caption": "Ditch the burnt taste and brew like a pro with our sleek ceramic pour-over, now available with free shipping! Upgrade your morning routine this launch week and get a complimentary bag of premium beans on every order. Grab yours before stock runs out! #CoffeeLovers #PourOverPerfection #FreeBeans #HomeBrew",
+    "ad_image_path": "/home/algonyx/Projects/marketing_agent/examples/../tools/../static/generated/demo_product_raw_enhanced_real_esrgan_ad.png",
+    "created_at": "2026-08-01T11:38:03",
+    "simulated": true
+  },
+  {
+    "post_id": "sim-b3ed51dc1a",
+    "platform": "instagram",
+    "publish_datetime": "2026-08-01T19:00",
+    "status": "scheduled",
+    "caption": "Unlock your morning brew game with our sleek ceramic pour-over, now available with a free bag of premium beans inside! As a launch week exclusive, every order includes free shipping so you can sip fresh, artisanal coffee from the comfort of your home. Grab your set before these limited-time perks disappear! #PourOverPerfection #FreeShipping #CoffeeLovers #LaunchWeek",
+    "ad_image_path": "/home/algonyx/Projects/marketing_agent/examples/../tools/../static/generated/demo_product_raw_enhanced_real_esrgan_ad.png",
+    "created_at": "2026-08-01T11:40:46",
+    "simulated": true
+  }
+]
