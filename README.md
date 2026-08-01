@@ -519,7 +519,7 @@ here is a hardcoded string dropped into the chat.
 
 ---
 
-## Simulated components — clearly identified
+## Simulated components
 
 - **`publish_post`** — Getting a real business account with posting access to
   a platform's API (e.g. the Facebook Graph API) requires an approved
