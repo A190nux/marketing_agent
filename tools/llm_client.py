@@ -29,7 +29,7 @@ import urllib.request
 import urllib.error
 
 # Hardcoded config -- edit these directly rather than via env vars.
-OLLAMA_HOST = "http://192.168.1.101:11434"
+OLLAMA_HOST = "http://localhost:11434"
 MODEL_NAME = "qwen3.5:9b"
 
 # Qwen3.5 "thinking" mode can easily take well over 30s to produce reasoning
