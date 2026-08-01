@@ -48,5 +48,25 @@
     "ad_image_path": "/home/algonyx/Projects/marketing_agent/examples/../tools/../static/generated/demo_product_raw_enhanced_real_esrgan_ad.png",
     "created_at": "2026-08-01T11:40:46",
     "simulated": true
+  },
+  {
+    "post_id": "sim-7b7488dff6",
+    "platform": "linkedin",
+    "publish_datetime": "2026-08-02T10:00",
+    "status": "scheduled",
+    "caption": "Stop letting your AI agents accidentally drop production databases by feeding them messy or irrelevant data. Our smart integration filters the noise so your agents get exactly what they need to stay safe and efficient. Sign up for your free 3-month trial today and finally build agents that work flawlessly in production! #AIAgents #DatabaseSecurity #SaaSTools #ProductionReady",
+    "ad_image_path": "/home/algonyx/Projects/marketing_agent/tools/../static/generated/images_enhanced_real_esrgan_ad.png",
+    "created_at": "2026-08-01T15:05:08",
+    "simulated": true
+  },
+  {
+    "post_id": "sim-f179398ad3",
+    "platform": "linkedin",
+    "publish_datetime": "2026-08-02T10:00",
+    "status": "scheduled",
+    "caption": "Stop watching your AI agents hallucinate data or crash production databases because they can't find the right context. Our SaaS integration delivers exactly what your agents need, nothing more, ensuring seamless, reliable connections that keep your systems running smoothly. Sign up for our free 3-month trial today and transform your agent performance from the first day. #AIAgents #DatabaseIntegration #SaaSTools #ProductionReady",
+    "ad_image_path": "/home/algonyx/Projects/marketing_agent/tools/../static/generated/images_enhanced_real_esrgan_ad.png",
+    "created_at": "2026-08-01T15:11:12",
+    "simulated": true
   }
 ]

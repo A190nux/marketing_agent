@@ -30,9 +30,15 @@ Text sizing
 
 from __future__ import annotations
 
+import json
 import os
+import re
+import tempfile
 
 from PIL import Image, ImageDraw, ImageFont
+
+from . import llm_client
+from .super_resolution import get_backend
 
 GENERATED_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "generated")
 os.makedirs(GENERATED_DIR, exist_ok=True)
@@ -48,6 +54,33 @@ TEXT_COLOR = (255, 255, 255)
 # _try_img2img_stylize). Only used if style="img2img" is requested AND
 # torch/diffusers/a CUDA GPU are available -- otherwise silently skipped.
 SD15_MODEL_ID = "stable-diffusion-v1-5/stable-diffusion-v1-5"
+
+# img2img "strength" controls how much of the ORIGINAL product photo
+# survives the diffusion pass -- this is a real product the manager is
+# selling, not a mood board, so the vision model's suggested strength is
+# always clamped into this band server-side regardless of what it returns.
+# It gets creative latitude within the band, not control over whether the
+# product stays recognizable.
+IMG2IMG_MIN_STRENGTH = 0.15
+IMG2IMG_MAX_STRENGTH = 0.45
+IMG2IMG_DEFAULT_STRENGTH = 0.25  # used if the vision call is unreachable/unparsable
+IMG2IMG_DEFAULT_PROMPT = (
+    "professional product advertisement photography, clean lighting, commercial"
+)
+
+IMG2IMG_SYSTEM_PROMPT = (
+    "You are an art director for product-advertising photography. You will be "
+    "shown a product photo along with the product name and offer. Suggest a "
+    "short Stable Diffusion img2img prompt describing lighting, mood, and "
+    "composition changes -- NOT a new product, scene, or object -- that would "
+    "make this specific photo read as more professional ad photography. Also "
+    f"suggest a 'strength' value between {IMG2IMG_MIN_STRENGTH} and "
+    f"{IMG2IMG_MAX_STRENGTH} for how much the image should change (low = "
+    "subtle polish, high = more noticeable reinterpretation). Stay "
+    "conservative -- the product itself must remain clearly recognizable. "
+    'Return ONLY compact JSON: {"prompt": "...", "strength": <float>}. No '
+    "markdown fences, no other text."
+)
 
 
 def _load_font(size: int) -> ImageFont.ImageFont:
@@ -181,15 +214,65 @@ def _composite(enhanced: Image.Image, offer_text: str, product: str) -> Image.Im
     return canvas
 
 
-def _try_img2img_stylize(image: Image.Image) -> Image.Image | None:
+def _decide_img2img_direction(image: Image.Image, product: str, offer_text: str) -> tuple[str, float]:
+    """Ask the vision-capable LLM to look at the ACTUAL photo and propose an
+    img2img prompt + strength, instead of using the same hardcoded prompt/
+    strength for every product regardless of what it looks like. Falls back
+    to a fixed default if Ollama/vision is unreachable or the response can't
+    be parsed. `strength` is ALWAYS clamped to
+    [IMG2IMG_MIN_STRENGTH, IMG2IMG_MAX_STRENGTH] regardless of what the model
+    returns -- see the constants above."""
+    fd, tmp_path = tempfile.mkstemp(suffix=".jpg", dir=GENERATED_DIR)
+    os.close(fd)
+    try:
+        image.convert("RGB").save(tmp_path, quality=90)
+        raw = llm_client.chat_vision(
+            IMG2IMG_SYSTEM_PROMPT,
+            f"Product: {product}\nOffer: {offer_text}",
+            tmp_path,
+            temperature=0.6,
+            think=True,
+        )
+    finally:
+        if os.path.exists(tmp_path):
+            os.remove(tmp_path)
+
+    if raw:
+        cleaned = re.sub(r"^```(?:json)?|```$", "", raw.strip(), flags=re.MULTILINE).strip()
+        try:
+            parsed = json.loads(cleaned)
+            prompt = str(parsed.get("prompt", "")).strip()
+            strength = max(IMG2IMG_MIN_STRENGTH, min(IMG2IMG_MAX_STRENGTH, float(parsed.get("strength"))))
+            if prompt:
+                print(f"[ad_image] vision model chose img2img prompt={prompt!r} strength={strength:.2f}")
+                return prompt, strength
+        except (json.JSONDecodeError, TypeError, ValueError, KeyError):
+            pass  # fall through to the fixed default below
+
+    print(f"[ad_image] vision-guided img2img direction unavailable -- using default "
+          f"prompt and strength={IMG2IMG_DEFAULT_STRENGTH}")
+    return IMG2IMG_DEFAULT_PROMPT, IMG2IMG_DEFAULT_STRENGTH
+
+
+def _try_img2img_stylize(image: Image.Image, product: str, offer_text: str) -> Image.Image | None:
     """Optional stretch pass. Returns None (skip) if diffusers/torch/GPU
-    aren't available -- never raises."""
+    aren't available -- never raises.
+
+    On success, the stylized output is run back through the real_esrgan SR
+    backend -- not a plain .resize() -- to recover the resolution lost by
+    downsampling to SD1.5's native 512x512 working size. A plain resize
+    there was upsampling with ordinary interpolation, which silently
+    softened the output rather than restoring detail; real_esrgan does a
+    genuine learned 4x upscale (512 -> 2048), so the composite step
+    downsamples from something sharp instead of upsampling something soft."""
     try:
         import torch  # type: ignore
         from diffusers import StableDiffusionImg2ImgPipeline  # type: ignore
 
         if not torch.cuda.is_available():
             return None
+
+        prompt, strength = _decide_img2img_direction(image, product, offer_text)
 
         # runwayml/stable-diffusion-v1-5 was taken down from Hugging Face in
         # 2024 (licensing dispute) -- this is the current maintained mirror.
@@ -200,12 +283,21 @@ def _try_img2img_stylize(image: Image.Image) -> Image.Image | None:
             model_id, torch_dtype=torch.float16
         ).to("cuda")
         result = pipe(
-            prompt="professional product advertisement photography, clean lighting, commercial",
+            prompt=prompt,
             image=image.resize((512, 512)),
-            strength=0.25,
+            strength=strength,
             guidance_scale=7.0,
         )
-        return result.images[0].resize(image.size)
+        stylized_512 = result.images[0]
+
+        sr_backend = get_backend("real_esrgan")
+        recovered = sr_backend.enhance(stylized_512)
+        if sr_backend.used_fallback:
+            print(f"[ad_image] img2img output resolution recovery fell back to Lanczos "
+                  f"({sr_backend.fallback_reason}) -- check checkpoints/RealESRGAN_x4plus.pth")
+        else:
+            print("[ad_image] img2img stylize applied, resolution recovered via real_esrgan")
+        return recovered
     except Exception as e:
         print(f"[ad_image] img2img stylize skipped: {type(e).__name__}: {e}")
         return None
@@ -221,7 +313,7 @@ def generate_ad_image(
         img = img.convert("RGB")
 
         if style == "img2img":
-            stylized = _try_img2img_stylize(img)
+            stylized = _try_img2img_stylize(img, product, offer_text)
             if stylized is not None:
                 img = stylized  # else: silently fall back to plain composite
 

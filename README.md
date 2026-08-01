@@ -483,9 +483,20 @@ here is a hardcoded string dropped into the chat.
 - **`mri_model` SR backend** — **not simulated**: it runs real inference with
   the actual trained RRDBNet weights. What's disclosed is a genuine *domain*
   mismatch (medical imagery vs. product photography), not a fake tool.
-- **Ad-image generation** defaults to deterministic Pillow compositing (photo
-  + banner + offer text), not diffusion-based image generation — see
-  "Known limitations" below for exactly what this means in practice.
+- **Ad-image generation** defaults to deterministic Pillow compositing
+  (photo + banner + offer text), not text/image-to-image diffusion — chosen
+  deliberately for reliability. An optional SD1.5
+  img2img "stylize" pass exists in tools/ad_image.py (style="img2img")
+  and is used opportunistically if torch + diffusers + a CUDA GPU are
+  available, otherwise silently skipped. When it does run, the prompt and
+  strength aren't fixed — a vision-capable call to Qwen3.5 looks at the
+  actual product photo and campaign brief and proposes both, with strength
+  always clamped server-side to a conservative band (0.15–0.45) so the
+  product itself stays recognizable regardless of what the model suggests.
+  The stylized output is then run back through the real_esrgan SR backend
+  (not a plain resize) to recover the resolution lost to SD1.5's native
+  512×512 working size, before compositing proceeds exactly as in the
+  default path.
 - **Every LLM-backed tool** falls back to a deterministic, non-LLM template
   if Ollama isn't reachable.
 
@@ -493,18 +504,16 @@ here is a hardcoded string dropped into the chat.
 
 ## Known limitations
 
-- **What `generate_ad_image` actually does by default is compositing, not
-  generation.** The photo (enhanced or original) is placed on a canvas with an
-  auto-sized banner and the offer text overlaid — no pixels of the product
-  photo itself are synthesized or altered beyond the super-resolution step
-  and a center-crop/resize to fit the canvas. There is an optional Stable
-  Diffusion 1.5 img2img "stylize" pass (`style="img2img"`) that will actually
-  restyle the photo if `torch` + `diffusers` + a CUDA GPU are available, but
-  it's opportunistic and silently skipped otherwise, falling back to the
-  same plain composite. So "generated ad image" should be read as "the
-  photo, composited into an ad layout" rather than "an AI-generated scene"
-  unless the img2img path specifically fired — the Diagnostics panel doesn't
-  currently report which path the ad image took, only the SR backend.
+- **The optional img2img ad-image path is still a subtle effect by design —
+  strength is deliberately kept low (0.15–0.45) so the actual product
+  stays recognizable, and the result still goes through the same crop/
+  resize/banner compositing as every other ad image. So even with a
+  real, successful diffusion pass, don't expect a dramatically different-
+  looking output — the visible difference is closer to "polished lighting/
+  texture" than "a new creative." This path also adds real cost when it's
+  used: a one-time multi-GB SD1.5 download, a vision-model call per ad, the
+  diffusion pass itself, and a second SR pass — all gated behind style="img2img"
+  and CUDA availability, so it never affects the default composite path.
 - The `intake` keyword-regex fallback (used only when Ollama is unreachable)
   is noticeably less robust than LLM-based extraction — it pulls one field
   per matched keyword and doesn't handle free-form phrasing well. This is
