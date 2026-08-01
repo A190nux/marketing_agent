@@ -36,10 +36,9 @@ ollama serve
 
 By default Ollama listens on `http://localhost:11434`. This project talks to
 Ollama through a single hardcoded constant, `OLLAMA_HOST` in
-`tools/llm_client.py` — if you're running Ollama on the same machine, change it
-to `http://localhost:11434`; if it's on another machine on your network (e.g.
-because your LLM and your SR model run on separate GPUs), point it at that
-machine's address instead.
+`tools/llm_client.py` — leave it as-is if Ollama runs on the same machine;
+if it's on another machine on your network (e.g. because your LLM and your
+SR model run on separate GPUs), point it at that machine's address instead.
 
 ---
 
@@ -48,7 +47,7 @@ machine's address instead.
 ```bash
 # 1. Clone and enter the project
 git clone https://github.com/A190nux/marketing_agent
-cd marketing_assistant
+cd marketing_agent
 
 # 2. Install dependencies
 pip install -r requirements.txt
@@ -70,6 +69,20 @@ image enhancement, ad creation, approval gate, publish, analytics — is
 testable with zero external dependencies running. Quality is better across
 the board with the real model and real weights in place.
 
+**Python 3.11** is recommended. `basicsr`/`realesrgan` (the Real-ESRGAN
+dependency) lag behind on newer Python support, so 3.11 is the safe middle
+ground — modern enough for current `torch`/`torchvision` wheels, old enough
+that `basicsr` won't fight you. 3.10–3.12 should also work; avoid 3.13+.
+
+**One dependency landmine, handled automatically:** `basicsr` imports
+`torchvision.transforms.functional_tensor`, which was removed in
+`torchvision>=0.17` — this used to break `import realesrgan` outright with
+a `ModuleNotFoundError` on any reasonably current install. `tools/super_resolution.py`
+now patches this transparently at import time (`_patch_basicsr_torchvision_compat`)
+by injecting a small compatibility shim into `sys.modules` before `basicsr`
+imports it, so this just works without editing any installed package files
+by hand.
+
 ### Headless demo (no UI)
 
 ```bash
@@ -81,16 +94,24 @@ writes the transcript to `examples/demo_transcript.json`. Ends with a run-mode
 summary telling you whether Ollama and the SR backend were actually reached
 or fell back.
 
-### Comparing the two SR backends directly
+### Comparing the SR backends directly
 
 ```bash
 python examples/compare_sr_backends.py path/to/product_photo.jpg
+python examples/compare_sr_backends.py path/to/product_photo.jpg --native-scale
 ```
 
-Runs `real_esrgan`, `mri_model`, and a plain bicubic baseline outside the
-agent, side by side, and fails loudly rather than silently falling back if a
-backend can't load its real weights. See the "Super-resolution" section below
-for the actual comparison images this produced.
+Runs `real_esrgan`, `mri_model` (tiled, the app's default), `mri_model_whole_image`
+(the old non-tiled behavior, for direct comparison), and a plain bicubic
+baseline outside the agent, side by side — and fails loudly rather than
+silently falling back if a backend can't load its real weights. Prints a
+pixel-level diff against bicubic and a sharpness (Laplacian variance) score
+per backend, so "did the model actually do anything" has a number attached,
+not just a side-by-side you eyeball. `--native-scale` downsamples the input
+to 64×64 first — `mri_model`'s actual training crop size — to separate
+domain mismatch (MRI vs. photo content) from scale mismatch (trained-crop
+vs. full-photo size). See the "Super-resolution" section below for the
+actual comparison images this produced.
 
 ---
 
@@ -112,6 +133,34 @@ an 8GB GPU).
 - `torch` — the MRI super-resolution model and the optional img2img stylize pass
 - `realesrgan` / `basicsr` — the Real-ESRGAN backend
 - `diffusers` *(optional)* — Stable Diffusion 1.5 img2img, only used opportunistically
+
+---
+
+## Interface
+
+The Streamlit app (`app.py`) is a two-pane layout: chat + upload on the
+left, workflow output on the right. It covers every interaction point the
+assignment calls for:
+
+- **Chat** with the assistant to describe the campaign; it asks for
+  whatever's still missing.
+- **Upload** a product photo via the file uploader.
+- **Sidebar controls:** SR backend picker (`real_esrgan` / `mri_model`, with
+  a note on what the resolution/tiling behavior actually means), ad-creative
+  style picker (`composite` / `img2img`), and a **Diagnostics** panel
+  showing live whether Ollama and each SR backend are reachable or silently
+  falling back.
+- **Before/after** super-resolution comparison, shown before the ad image
+  is generated.
+- **View** the generated ad image and caption.
+- **Review** the recommended platform and publish time, with a genuinely
+  LLM-reasoned rationale (heuristic fallback only if Ollama is unreachable).
+- **Approve or request changes** — the human-approval gate. Chat is
+  disabled while a post is pending approval (sending a message there would
+  otherwise re-run the whole pipeline from intake instead of being treated
+  as feedback — use the Request changes box for that).
+- **View** publishing status and performance analysis, both clearly marked
+  simulated.
 
 ---
 
@@ -245,24 +294,24 @@ showing), both are wired into the same tool interface, clearly labeled, with
 a sidebar note explaining the domain mismatch and a Diagnostics panel so it's
 never ambiguous which one actually ran versus fell back.
 
-### Comparing the two backends
+### Comparing the backends: how we found and fixed the scale-mismatch problem
 
 `examples/compare_sr_backends.py` runs `real_esrgan`, `mri_model`, and a plain
 bicubic baseline side by side outside the agent, and computes a pixel-level
-diff between `mri_model`'s output and bicubic specifically to quantify how
-much the trained residual branch is contributing versus just reproducing that
-skip connection (see above). Below are three comparisons run this way, at
-three different input regimes.
+diff plus a sharpness (Laplacian variance) score against bicubic specifically
+to quantify how much the trained residual branch is contributing versus just
+reproducing that skip connection (see above). The three comparisons below
+tell a single story, in the order we actually found it.
 
-#### Arbitrary/original input size
+#### 1. The problem: full-size photo, without tiling
 
 `examples/sr_comparison/original_scale/`
 
-At full product-photo resolution — well outside the MRI model's training
-distribution — `mri_model`'s output is visually indistinguishable from plain
-bicubic (the numbers differ slightly, since the trained residual branch is
-still doing *something*, just not much that's visible), while `real_esrgan`
-produces a clearly sharper, more detailed result.
+At full product-photo resolution, run through the model in one shot (no
+tiling), `mri_model`'s output was visually indistinguishable from plain
+bicubic — the numbers differed slightly (the trained residual branch was
+still doing *something*), but not enough to see, while `real_esrgan`
+produced a clearly sharper, more detailed result on the same photo.
 
 | Real-ESRGAN | MRI model | Bicubic |
 |---|---|---|
@@ -270,13 +319,19 @@ produces a clearly sharper, more detailed result.
 
 ![side by side](examples/sr_comparison/original_scale/side_by_side.png)
 
-#### Native training scale (64×64 → 256×256)
+#### 2. The diagnosis: native training scale (64×64 → 256×256)
 
 `examples/sr_comparison/native_scale/`
 
 Downsampling the input to 64×64 first — the model's actual training crop
-size — before running all three backends puts `mri_model` back inside its
-own distribution. Here we can see the actual difference between the models.
+size — before running all three backends puts `mri_model` back inside the
+distribution it was trained on. The difference becomes obvious: at this
+scale, `mri_model`'s sharpness gain over bicubic went from roughly +5%
+(full size, indistinguishable) to over +200% in our testing. This told us
+the weak effect at full size wasn't purely the MRI-vs-photo domain gap —
+it was compounded by a *scale* mismatch: the model's fixed-pixel receptive
+field sees full-size photo content at a much finer relative scale than
+anything in its training crops.
 
 | Real-ESRGAN | MRI model | Bicubic |
 |---|---|---|
@@ -284,17 +339,21 @@ own distribution. Here we can see the actual difference between the models.
 
 ![side by side](examples/sr_comparison/native_scale/side_by_side.png)
 
-#### Tiled / sliced inference
+#### 3. The fix: tiled inference (now `mri_model`'s default behavior)
 
 `examples/sr_comparison/slicing/`
 
-A third approach: instead of downsampling the whole photo (losing resolution
-just to fit the model's training regime), the input is cut into 64×64 tiles,
-each tile is run through `mri_model` independently at its native scale, and
-the upscaled tiles are stitched back together. This keeps every patch inside
-the distribution the model actually learned, while still producing a
-full-resolution output from a full-resolution input — a middle ground
-between the two comparisons above.
+Rather than downsampling the whole photo (losing resolution just to fit the
+model's training regime), `MRIModelBackend` now splits the input into
+overlapping 64×64 tiles, runs each tile through the model independently at
+the scale confirmed above to actually work, and blends the overlaps back
+together (simple averaging — a mild seam is possible at low overlap, not a
+tapered blend). This keeps every patch inside the distribution the model
+learned, while still producing a full-resolution output from a full-resolution
+input. **This is what `mri_model` does by default now** — the non-tiled
+behavior in comparison 1 is no longer what a manager using the app sees;
+it's kept in `examples/compare_sr_backends.py` (as `mri_model_whole_image`)
+purely so this improvement stays checkable, not reachable from the app.
 
 | Real-ESRGAN | MRI model (tiled) | Bicubic |
 |---|---|---|
