@@ -47,7 +47,7 @@ machine's address instead.
 
 ```bash
 # 1. Clone and enter the project
-git clone <your-repo-url>
+git clone https://github.com/A190nux/marketing_agent
 cd marketing_assistant
 
 # 2. Install dependencies
@@ -98,9 +98,7 @@ for the actual comparison images this produced.
 
 **LangGraph.** The workflow is modeled as an explicit state machine
 (`graph.py`) with a `MemorySaver` checkpointer and a hard `interrupt()` gate
-before publishing. This is the core reason for choosing LangGraph over
-something like DSPy (which optimizes prompts/pipelines but isn't built for
-stateful, multi-tool, human-in-the-loop orchestration): the campaign needs
+before publishing. This is the core reason for choosing LangGraph: the campaign needs
 persistent state across many conversation turns, conditional routing between
 tools, and a structural pause-and-resume point for manager approval — exactly
 what LangGraph's graph + checkpointer + `interrupt()` primitives are for.
@@ -183,8 +181,7 @@ graph TD;
 ```
 
 This diagram is generated directly from the compiled graph
-(`graph.get_graph().draw_mermaid()`), so it's guaranteed to match the code
-rather than drifting out of sync as a hand-drawn approximation would.
+(`graph.get_graph().draw_mermaid()`).
 
 ### Why "missing fields" ends the graph instead of looping inside it
 
@@ -221,9 +218,7 @@ fully exercised even with no GPU weights present.
 
 ### Our brain-MRI super-resolution model
 
-`mri_model` (`tools/mri_sr_model.py`) is an RRDBNet — the architecture is
-copied verbatim from the training notebook so `best_sr_model.pt` loads
-exactly as trained — originally built for single-channel T1 brain-MRI slices
+`mri_model` (`tools/mri_sr_model.py`) is an RRDBNet, originally built for single-channel T1 brain-MRI slices
 at 64×64 → 256×256, scale 4. It's reused here on RGB product photos through a
 documented domain adapter: convert to YCbCr, run the model on the Y
 (luminance) channel only, upsample Cb/Cr with plain bicubic, merge back to
@@ -281,8 +276,7 @@ produces a clearly sharper, more detailed result.
 
 Downsampling the input to 64×64 first — the model's actual training crop
 size — before running all three backends puts `mri_model` back inside its
-own distribution. Here the result reverses: our model outperforms
-Real-ESRGAN, since it's now operating exactly where it was trained to.
+own distribution. Here we can see the actual difference between the models.
 
 | Real-ESRGAN | MRI model | Bicubic |
 |---|---|---|
@@ -312,57 +306,136 @@ between the two comparisons above.
 
 ## Example conversation
 
-Reproducible with `python examples/run_demo.py`; the raw messages are also
-written to `examples/demo_transcript.json`.
+This is the actual conversation transcript produced by `python examples/run_demo.py`,
+read directly from `examples/demo_transcript.json` (each entry is exactly the
+`{"role": ..., "content": ...}` object LangGraph's `messages` state produced —
+nothing paraphrased or reformatted).
 
+**Turn 1 — manager describes the campaign**
+
+```json
+{
+  "role": "user",
+  "content": "Hi! I need help advertising our new ceramic pour-over coffee maker. We're running a launch promo. Product: Ceramic pour-over coffee maker. Offer: Buy one get a free bag of beans. Target audience: home coffee enthusiasts aged 25-40. Goal: drive sales for the launch week."
+}
 ```
-=== Turn 1: manager describes the campaign ===
-Got it — here's the brief I have:
-- Product: Ceramic pour-over coffee maker
-- Offer: Buy one get a free bag of beans
-- Audience: Home coffee enthusiasts aged 25-40
-- Goal: Drive sales for the launch week
 
-Please upload a product image and I'll get started.
+```json
+{
+  "role": "assistant",
+  "content": "Got it — here's the brief I have:\n- Product: Ceramic pour-over coffee maker\n- Offer: Buy one get a free bag of beans\n- Audience: Home coffee enthusiasts aged 25-40\n- Goal: Drive sales for the launch week\n\nPlease upload a product image and I'll get started."
+}
+```
 
-=== Turn 2: manager uploads the product photo ===
-[real_esrgan] applied basicsr/torchvision compatibility shim (torchvision.transforms.functional_tensor)
-[real_esrgan] loaded weights from checkpoints/RealESRGAN_x4plus.pth
-        Tile 1/1
-[assistant] Enhanced the product photo using the 'real_esrgan' super-resolution model.
-[assistant] Here's the draft ad image and caption for your review.
-[assistant] Recommended platform: Instagram at 2026-08-01T19:00. Instagram's visual-first format and strong engagement from home coffee enthusiasts in the evening make it ideal for showcasing product aesthetics and driving direct sales during launch week.
-Ad image saved to: static/generated/demo_product_raw_enhanced_real_esrgan_ad.png
-Platform recommendation: {'platform': 'instagram', 'publish_datetime': '2026-08-01T19:00', 'rationale': "Instagram's visual-first format and strong engagement from home coffee enthusiasts in the evening make it ideal for showcasing product aesthetics and driving direct sales during launch week."}
+**Turn 2 — manager uploads the product photo** *(`image_check` flags it as
+low-res → `super_res` runs with `real_esrgan` → `ad_creation` → `platform_time_recommender`)*
 
-=== Turn 3: manager requests changes ===
-Recommended platform: Instagram at 2026-08-01T19:00. Instagram's visual-centric feed and strong engagement among 25-40 year olds make it ideal for showcasing coffee aesthetics to drive launch-week sales, with 7pm hitting the peak of evening browsing sessions when impulse purchases are most likely.
+```json
+{
+  "role": "assistant",
+  "content": "Enhanced the product photo using the 'real_esrgan' super-resolution model."
+}
+```
 
-Caption before feedback: Upgrade your morning routine with our sleek ceramic pour-over, designed to brew the perfect cup every single time. As a launch week special, grab your maker today and get a fresh bag of beans on us for free! Treat yourself to café-quality coffee right in your kitchen without the hassle. #PourOverCoffee #HomeBarista #CoffeeLovers #LaunchSpecial
-Caption after feedback:  Unlock your morning brew game with our sleek ceramic pour-over, now available with a free bag of premium beans inside! As a launch week exclusive, every order includes free shipping so you can sip fresh, artisanal coffee from the comfort of your home. Grab your set before these limited-time perks disappear! #PourOverPerfection #FreeShipping #CoffeeLovers #LaunchWeek
-Feedback actually changed the caption: True
+```json
+{
+  "role": "assistant",
+  "content": "Here's the draft ad image and caption for your review."
+}
+```
 
-=== Turn 4: manager approves ===
-[assistant] [SIMULATED] Post scheduled on instagram (post_id=sim-b3ed51dc1a).
-[assistant] [SIMULATED] Performance snapshot — Impressions: 10218, Engagement rate: 1.78%.
-Recommendations:
-1. Increase the caption's emotional hook by adding a specific sensory detail (e.g., "wake up to the aroma of..." or "start your day with a ritual of...") to boost initial engagement and comment count.
-2. Add a direct question in the first line of the caption (e.g., "What's your go-to morning brew?") to encourage user interaction and improve the algorithmic reach.
-3. Replace generic hashtags with 3-5 niche-specific tags (e.g., #CeramicPourOver, #SpecialtyCoffeeCommunity, #HomeBarista) to target a more relevant audience and reduce wasted impressions.
+```json
+{
+  "role": "assistant",
+  "content": "Recommended platform: Instagram at 2026-08-01T19:00. Instagram's visual-first format and strong engagement from home coffee enthusiasts in the evening make it ideal for showcasing product aesthetics and driving direct sales during launch week."
+}
+```
 
-Full transcript written to examples/demo_transcript.json
+*(graph pauses here — `human_approval` calls `interrupt()`, control returns to the app)*
 
-=== Run mode summary (was this transcript produced by the real models, or fallbacks?) ===
-Ollama (qwen3.5:9b) reachable: True
-  real_esrgan: real inference
-  mri_model: not selected this run (only 'real_esrgan' was used) -- see compare_sr_backends.py to test both directly
+**Turn 3 — manager requests changes**
+
+```json
+{
+  "role": "user",
+  "content": "[Requested changes] Make the caption punchier and mention free shipping."
+}
+```
+
+```json
+{
+  "role": "assistant",
+  "content": "Updated based on your feedback (\"Make the caption punchier and mention free shipping.\") — here's the revised ad image and caption."
+}
+```
+
+```json
+{
+  "role": "assistant",
+  "content": "Recommended platform: Instagram at 2026-08-01T19:00. Instagram's visual-centric feed and strong engagement among 25-40 year olds make it ideal for showcasing coffee aesthetics to drive launch-week sales, with 7pm hitting the peak of evening browsing sessions when impulse purchases are most likely."
+}
+```
+
+**Turn 4 — manager approves**
+
+```json
+{
+  "role": "assistant",
+  "content": "[SIMULATED] Post scheduled on instagram (post_id=sim-b3ed51dc1a)."
+}
+```
+
+```json
+{
+  "role": "assistant",
+  "content": "[SIMULATED] Performance snapshot — Impressions: 10218, Engagement rate: 1.78%.\nRecommendations:\n1. Increase the caption's emotional hook by adding a specific sensory detail (e.g., \"wake up to the aroma of...\" or \"start your day with a ritual of...\") to boost initial engagement and comment count.\n2. Add a direct question in the first line of the caption (e.g., \"What's your go-to morning brew?\") to encourage user interaction and improve the algorithmic reach.\n3. Replace generic hashtags with 3-5 niche-specific tags (e.g., #CeramicPourOver, #SpecialtyCoffeeCommunity, #HomeBarista) to target a more relevant audience and reduce wasted impressions."
+}
 ```
 
 The graph never called `publish_post` until `approval_status == "approved"`
 was written by `human_approval` — structurally enforced by the `interrupt()`
-gate in `graph.py`, not just a prompt instruction, and it can be seen above
-that the manager's "request changes" feedback genuinely changed the
-regenerated caption rather than being discarded.
+gate in `graph.py`, not just a prompt instruction. The full, unmodified file
+is in `examples/demo_transcript.json`; regenerate it any time with
+`python examples/run_demo.py`.
+
+### How the `[SIMULATED]` steps above actually work
+
+**`publish_post`** never calls a real social-media API. Given the approved
+`post_content` (caption + ad image path), `platform`, and `publish_datetime`,
+it:
+1. Compares `publish_datetime` to the current time to decide the status —
+   `"scheduled"` if it's in the future, `"published"` otherwise (in the
+   transcript above, `"scheduled"`).
+2. Generates a fake post ID as `sim-<10 random hex chars>` (`sim-b3ed51dc1a` above).
+3. Appends a full record — post id, platform, datetime, status, caption, ad
+   image path, creation timestamp, `"simulated": true` — to a local JSON
+   file, `data/posts.json`, so later steps (analytics, UI history) have
+   something real to read back.
+4. Returns `{status, post_id, platform, publish_datetime, simulated: true}`,
+   shaped exactly like what a real Graph API response would give you.
+
+**`analyze_performance`** never pulls from a platform Insights API either.
+Given just the `post_id`, it:
+1. Seeds Python's `random.Random` with a hash of the `post_id` itself
+   (`int(sha256(post_id).hexdigest(), 16) % 2**32`) — so re-running analytics
+   on the *same* post always reproduces the *same* fake numbers, rather than
+   generating fresh randomness every call.
+2. Draws impressions from a plausible range, then derives reach, likes,
+   comments, shares, and clicks from it using randomized-but-bounded ratios
+   (e.g. reach is 55–85% of impressions), and computes CTR and engagement
+   rate from those.
+3. Looks up the post's platform and caption from `data/posts.json` (written
+   by `publish_post`) to give the LLM real context.
+4. Sends those metrics to the LLM asking for exactly 3 concrete
+   recommendations — this part is genuinely generated, not fake, only the
+   metrics feeding it are; the LLM's actual writing is what changes between
+   an Ollama-reachable run and the offline template fallback.
+5. Returns everything tagged `"simulated": true`.
+
+So concretely: the *numbers* in both steps are fabricated (locally stored or
+seeded-random), but the *shapes*, the *approval-gating*, and the
+*recommendations text* are all real logic running against them — nothing
+here is a hardcoded string dropped into the chat.
 
 ---
 
